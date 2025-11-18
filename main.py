@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
 from typing import List, Optional
@@ -27,19 +27,23 @@ MOCK_USERS = {
     }
 }
 
-MOCK_TOKENS = {
+MOCK_TOKENS: dict[str, str] = {
     # token -> email
 }
 
-MOCK_EVENTS = [
+MOCK_EVENTS: List[dict] = [
     {
         "id": "evt_1",
         "name": "Holiday Gift Swap",
+        "event_type": "Secret Santa",
         "date": "2025-12-15",
         "budget": 40,
         "participants": ["Alice", "Bob", "Charlie"],
         "ownerId": "u_demo_1",
         "status": "draft",
+        "allow_wishlists": True,
+        "collect_addresses": False,
+        "custom_message": "Welcome to our annual swap!",
     }
 ]
 
@@ -66,6 +70,10 @@ class EventCreate(BaseModel):
     date: str
     budget: Optional[float] = None
     participants: List[str] = []
+    event_type: Optional[str] = "Secret Santa"
+    allow_wishlists: Optional[bool] = True
+    collect_addresses: Optional[bool] = False
+    custom_message: Optional[str] = None
 
 class Event(BaseModel):
     id: str
@@ -75,6 +83,10 @@ class Event(BaseModel):
     participants: List[str] = []
     ownerId: str
     status: str = "draft"
+    event_type: Optional[str] = "Secret Santa"
+    allow_wishlists: Optional[bool] = True
+    collect_addresses: Optional[bool] = False
+    custom_message: Optional[str] = None
 
 # ----------------------
 # Helpers
@@ -89,8 +101,6 @@ def get_user_from_token(token: str) -> dict:
         raise HTTPException(status_code=401, detail="User not found")
     return user
 
-# Dependency-like function using header
-from fastapi import Header
 async def current_user(authorization: Optional[str] = Header(default=None)):
     if not authorization:
         raise HTTPException(status_code=401, detail="Missing Authorization header")
@@ -177,6 +187,10 @@ def create_event(payload: EventCreate, user: dict = Depends(current_user)):
         participants=payload.participants or [],
         ownerId=user["id"],
         status="draft",
+        event_type=payload.event_type or "Secret Santa",
+        allow_wishlists=payload.allow_wishlists if payload.allow_wishlists is not None else True,
+        collect_addresses=payload.collect_addresses if payload.collect_addresses is not None else False,
+        custom_message=payload.custom_message,
     )
     MOCK_EVENTS.append(event.model_dump())
     return event
