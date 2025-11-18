@@ -1,8 +1,10 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, EmailStr
+from typing import List, Optional
 
-app = FastAPI()
+app = FastAPI(title="GiftFlow Mock API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -12,58 +14,172 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ----------------------
+# Mock Data (temporary)
+# ----------------------
+# This is intentionally simple to support UI development.
+MOCK_USERS = {
+    "demo@giftflow.app": {
+        "name": "Demo User",
+        "email": "demo@giftflow.app",
+        "password": "demo123",  # plain text for mock only
+        "id": "u_demo_1",
+    }
+}
+
+MOCK_TOKENS = {
+    # token -> email
+}
+
+MOCK_EVENTS = [
+    {
+        "id": "evt_1",
+        "name": "Holiday Gift Swap",
+        "date": "2025-12-15",
+        "budget": 40,
+        "participants": ["Alice", "Bob", "Charlie"],
+        "ownerId": "u_demo_1",
+        "status": "draft",
+    }
+]
+
+# ----------------------
+# Models
+# ----------------------
+class SignupRequest(BaseModel):
+    name: str
+    email: EmailStr
+    password: str
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+class AuthResponse(BaseModel):
+    token: str
+    name: str
+    email: EmailStr
+    userId: str
+
+class EventCreate(BaseModel):
+    name: str
+    date: str
+    budget: Optional[float] = None
+    participants: List[str] = []
+
+class Event(BaseModel):
+    id: str
+    name: str
+    date: str
+    budget: Optional[float] = None
+    participants: List[str] = []
+    ownerId: str
+    status: str = "draft"
+
+# ----------------------
+# Helpers
+# ----------------------
+
+def get_user_from_token(token: str) -> dict:
+    email = MOCK_TOKENS.get(token)
+    if not email:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user = MOCK_USERS.get(email)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+# Dependency-like function using header
+from fastapi import Header
+async def current_user(authorization: Optional[str] = Header(default=None)):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    token = authorization.replace("Bearer ", "")
+    return get_user_from_token(token)
+
+# ----------------------
+# Base routes
+# ----------------------
 @app.get("/")
 def read_root():
-    return {"message": "Hello from FastAPI Backend!"}
+    return {"message": "GiftFlow Mock API running"}
 
 @app.get("/api/hello")
 def hello():
-    return {"message": "Hello from the backend API!"}
+    return {"message": "Hello from GiftFlow backend!"}
 
 @app.get("/test")
 def test_database():
-    """Test endpoint to check if database is available and accessible"""
+    """Connectivity check (no DB required for mock)."""
     response = {
         "backend": "✅ Running",
-        "database": "❌ Not Available",
-        "database_url": None,
-        "database_name": None,
-        "connection_status": "Not Connected",
+        "database": "⏸️ Mock mode (no DB)",
+        "database_url": "❌ Not Set",
+        "database_name": "❌ Not Set",
+        "connection_status": "Mock",
         "collections": []
     }
-    
-    try:
-        # Try to import database module
-        from database import db
-        
-        if db is not None:
-            response["database"] = "✅ Available"
-            response["database_url"] = "✅ Configured"
-            response["database_name"] = db.name if hasattr(db, 'name') else "✅ Connected"
-            response["connection_status"] = "Connected"
-            
-            # Try to list collections to verify connectivity
-            try:
-                collections = db.list_collection_names()
-                response["collections"] = collections[:10]  # Show first 10 collections
-                response["database"] = "✅ Connected & Working"
-            except Exception as e:
-                response["database"] = f"⚠️  Connected but Error: {str(e)[:50]}"
-        else:
-            response["database"] = "⚠️  Available but not initialized"
-            
-    except ImportError:
-        response["database"] = "❌ Database module not found (run enable-database first)"
-    except Exception as e:
-        response["database"] = f"❌ Error: {str(e)[:50]}"
-    
-    # Check environment variables
-    import os
-    response["database_url"] = "✅ Set" if os.getenv("DATABASE_URL") else "❌ Not Set"
-    response["database_name"] = "✅ Set" if os.getenv("DATABASE_NAME") else "❌ Not Set"
-    
     return response
 
+# ----------------------
+# Auth (mock)
+# ----------------------
+@app.post("/api/auth/signup", response_model=AuthResponse)
+def signup(payload: SignupRequest):
+    if payload.email in MOCK_USERS:
+        raise HTTPException(status_code=400, detail="Email already in use")
+    user_id = f"u_{len(MOCK_USERS)+1}"
+    MOCK_USERS[payload.email] = {
+        "name": payload.name,
+        "email": payload.email,
+        "password": payload.password,
+        "id": user_id,
+    }
+    token = f"mocktoken_{user_id}"
+    MOCK_TOKENS[token] = payload.email
+    return AuthResponse(token=token, name=payload.name, email=payload.email, userId=user_id)
+
+@app.post("/api/auth/login", response_model=AuthResponse)
+def login(payload: LoginRequest):
+    user = MOCK_USERS.get(payload.email)
+    if not user or user.get("password") != payload.password:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    # issue token (reuse if exists)
+    existing_token = None
+    for t, e in MOCK_TOKENS.items():
+        if e == payload.email:
+            existing_token = t
+            break
+    token = existing_token or f"mocktoken_{user['id']}"
+    MOCK_TOKENS[token] = payload.email
+    return AuthResponse(token=token, name=user["name"], email=user["email"], userId=user["id"]) 
+
+@app.get("/api/me")
+def me(user: dict = Depends(current_user)):
+    return {"name": user["name"], "email": user["email"], "userId": user["id"]}
+
+# ----------------------
+# Events (mock)
+# ----------------------
+@app.get("/api/events", response_model=List[Event])
+def list_events(user: dict = Depends(current_user)):
+    owned = [Event(**e) for e in MOCK_EVENTS if e.get("ownerId") == user["id"]]
+    return owned
+
+@app.post("/api/events", response_model=Event)
+def create_event(payload: EventCreate, user: dict = Depends(current_user)):
+    new_id = f"evt_{len(MOCK_EVENTS)+1}"
+    event = Event(
+        id=new_id,
+        name=payload.name,
+        date=payload.date,
+        budget=payload.budget,
+        participants=payload.participants or [],
+        ownerId=user["id"],
+        status="draft",
+    )
+    MOCK_EVENTS.append(event.model_dump())
+    return event
 
 if __name__ == "__main__":
     import uvicorn
